@@ -15,6 +15,7 @@
 const bigram = require('./bigram.cjs');
 const embed = require('./embed.cjs');
 const audit = require('./audit.cjs');
+const rank = require('./rank.cjs');
 
 const RRF_K = 60;
 const LOOSE_MIN_COVERAGE = 0.5;
@@ -244,20 +245,50 @@ async function search(db, query, opts = {}) {
     grounding = lexicalGrounding(db, query, f);
     ungrounded = grounding === 0;      // grounding 为 null（算失败）时按"不是 ungrounded"处理
   }
-  const results = ungrounded && opts.ungrounded !== 'show'
-    ? []
-    : fuse([kw.rows, vs.rows], limit);
+  // ── 融合 → 加权重排（评审报告 4.2/4.3）──
+  // 加权和，**绝不相乘**：相乘会让中性记忆永远进不了前 5。
+  // 低于阈值不返回 —— 宁可少给，不要给错的。
+  const fused = ungrounded && opts.ungrounded !== 'show' ? [] : fuse([kw.rows, vs.rows], over);
+  const ids = fused.map((r) => Number(r.id));
+  const metaRows = ids.length
+    ? db.prepare(
+        'SELECT id, domain, affect, hit_count, last_touch, ts FROM observations WHERE id IN (' +
+          ids.map(() => '?').join(',') + ')'
+      ).all(...ids)
+    : [];
+  const metaById = new Map(metaRows.map((m) => [Number(m.id), m]));
+  const maxRrf = fused.reduce((mx, r) => Math.max(mx, r.rrf), 0) || 1;
+  const ranked = rank.rerank(
+    fused.map((r) => ({ ...r, ...(metaById.get(Number(r.id)) || {}), relevance: r.rrf / maxRrf })),
+    { threshold: opts.threshold != null ? Number(opts.threshold) : 0.35, limit }
+  );
+  const results = ranked.kept;
 
   // ── 审计：这次检索发生了什么（失败不影响返回）──
   audit.log(db, 'retrieve', {
     session: opts.session || null,
     query,
-    candidates: { keyword: kw.rows.length, vector: vs.rows.length, limit, over },
+    candidates: { keyword: kw.rows.length, vector: vs.rows.length, limit, over, fused: fused.length },
     chosen: results.map((r) => Number(r.id)),
-    scores: results.map((r) => ({ id: Number(r.id), rrf: r.rrf })),
+    scores: results.map((r) => ({ id: Number(r.id), score: r.score, parts: r.parts, stability: r.stability })),
     reason: 'ungrounded=' + ungrounded + ' grounding=' + grounding +
-            ' kwMode=' + kw.mode + (vectorError ? ' vectorError=' + vectorError : ''),
+            ' kwMode=' + kw.mode + ' threshold=' + ranked.threshold +
+            ' dropped=' + ranked.droppedByThreshold.length +
+            (vectorError ? ' vectorError=' + vectorError : ''),
   });
+  // 被阈值挡掉的单独记一笔 —— 这条能回答「这条为什么被淘汰」
+  if (ranked.droppedByThreshold.length) {
+    audit.log(db, 'decay', {
+      session: opts.session || null,
+      query,
+      candidates: { fused: fused.length, threshold: ranked.threshold },
+      chosen: [],
+      scores: ranked.droppedByThreshold.slice(0, 10).map((r) => ({
+        id: Number(r.id), score: r.score, parts: r.parts, stability: r.stability,
+      })),
+      reason: '加权分低于阈值未返回（宁可少给，不要给错）',
+    });
+  }
 
   return {
     results,
@@ -272,6 +303,7 @@ async function search(db, query, opts = {}) {
     vectorError,
     grounding,
     ungrounded,
+    ranked: { threshold: ranked.threshold, dropped: ranked.droppedByThreshold.length },
   };
 }
 

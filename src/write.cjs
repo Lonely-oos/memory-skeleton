@@ -5,6 +5,7 @@
  */
 const bigram = require('./bigram.cjs');
 const audit = require('./audit.cjs');
+const affectMod = require('./affect.cjs');
 const dbm = require('./db.cjs');
 
 /**
@@ -21,6 +22,7 @@ function writeObservations(db, {
   entity, entityType, observations,
   source = 'i-inferred', ts, provenance = null,
   kind = 'memory', session_id = null,
+  domain, affect, affectWhy, confirmed = false,
 } = {}) {
   if (!entity) throw new Error('必须给 entity');
   if (!Array.isArray(observations) || !observations.length) {
@@ -35,9 +37,21 @@ function writeObservations(db, {
     });
     const ids = [];
     for (const content of observations) {
+      // 情感分：只在写入时打一次，永不重估。没有 why 的分数不许入档。
+      const a = affect != null
+        ? { affect: Number(affect), write: { id: 'explicit', label: affectWhy || null } }
+        : affectMod.scoreAffect({
+            content, source, kind,
+            domain: domain || 'person', entityType: entityType || '未分类', confirmed,
+          });
+      if (!a.write.label) {
+        throw new Error('给了 affect 就必须同时给 affectWhy —— 没有 why 的分数不许入档');
+      }
       const id = dbm.insertObservation(db, bigram, {
         entity_id: entityId, entity_name: entity, content,
         source, provenance, kind, session_id, ts: t,
+        domain: domain || 'person', affect: a.affect, affect_why: a.write.label,
+        last_touch: t,
       });
       ids.push(id);
     }

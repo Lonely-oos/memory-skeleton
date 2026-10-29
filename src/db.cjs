@@ -14,7 +14,7 @@ const VEC_DLL = path.join(ROOT, 'vec0.dll');
 // 默认放仓库根目录；用 MEMORY_DB 环境变量可覆盖（指向绝对路径）
 const DB_PATH = process.env.MEMORY_DB || path.join(ROOT, 'memory.db');
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const TABLES = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -149,6 +149,53 @@ function migrate(db) {
     throw e;
   }
 
+  // ---------- v3：分区 / 情感 / 提及计数（设计评审 7.2、7.3）----------
+  // ⚠️ SQLite 不支持「如果不存在才加列」，只能先查 PRAGMA。
+  const obsCols3 = cols('observations');
+  db.exec('BEGIN');
+  try {
+    if (!obsCols3.includes('domain')) {
+      db.exec("ALTER TABLE observations ADD COLUMN domain TEXT DEFAULT 'person'");
+    }
+    if (!obsCols3.includes('affect')) {
+      db.exec('ALTER TABLE observations ADD COLUMN affect REAL DEFAULT 5.0');
+    }
+    if (!obsCols3.includes('affect_why')) {
+      db.exec('ALTER TABLE observations ADD COLUMN affect_why TEXT');
+    }
+    if (!obsCols3.includes('hit_count')) {
+      db.exec('ALTER TABLE observations ADD COLUMN hit_count INTEGER DEFAULT 0');
+    }
+    if (!obsCols3.includes('last_touch')) {
+      db.exec('ALTER TABLE observations ADD COLUMN last_touch TEXT');
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+    throw e;
+  }
+
+  // 三层巩固：摘要必须带 source_ids，否则无法用原文校验（防漂移）
+  db.exec(`CREATE TABLE IF NOT EXISTS summaries (
+    id INTEGER PRIMARY KEY,
+    level TEXT NOT NULL,
+    period TEXT NOT NULL,
+    text TEXT NOT NULL,
+    source_ids TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(level, period)
+  )`);
+  // 融合只建索引，不合并原文 —— 合并是不可逆的信息损失
+  db.exec(`CREATE TABLE IF NOT EXISTS memory_links (
+    from_id INTEGER NOT NULL,
+    to_id INTEGER NOT NULL,
+    relation TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (from_id, to_id, relation)
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_obs_domain ON observations(domain)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_obs_touch  ON observations(last_touch)');
+
   if (!has('obs_fts')) {
     db.exec(
       "CREATE VIRTUAL TABLE obs_fts USING fts5(content, entity_name, big, tokenize='unicode61')"
@@ -210,13 +257,16 @@ function insertObservation(db, bigram, o) {
   const r = db
     .prepare(
       'INSERT INTO observations ' +
-        '(entity_id, content, source, provenance, kind, session_id, ts, recorded_at) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        '(entity_id, content, source, provenance, kind, session_id, ts, recorded_at,' +
+        ' domain, affect, affect_why, hit_count, last_touch) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
     .run(
       entityId, o.content, o.source, o.provenance ?? null,
       o.kind || 'memory', o.session_id ?? null,
-      o.ts || now, now
+      o.ts || now, now,
+      o.domain || 'person', o.affect ?? 5.0, o.affect_why ?? null,
+      o.hit_count ?? 0, o.last_touch || o.ts || now
     );
   const id = Number(r.lastInsertRowid);
   indexObservation(db, bigram, id, o.content, o.entity_name);
