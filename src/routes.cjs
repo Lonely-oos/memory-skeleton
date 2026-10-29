@@ -28,8 +28,40 @@ const HINTS = [
   { re: /(上个月|上月)/, from: 31, to: 60, label: '上个月' },
 ];
 
+/** 本地墙钟 'YYYY-MM-DDTHH:mm:ss' —— 与库里主流格式（+08:00）对齐后截断比较 */
+function wallClock(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
+         `T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** 某天 00:00 的 Date（daysAgo>0 往过去；负数 = 未来） */
+function dayStart(now, daysAgo) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - daysAgo);
+  return d;
+}
+
+/**
+ * 「昨天」= 整个日历日，不是滚动 24 小时。
+ * 用户说「昨天」时想的是那一整天，而不是"从此刻往回 24 小时"。
+ * 窗口取半开区间 [最oldest那天 00:00, newest那天的次日 00:00)。
+ */
+function windowFor(daysAgoNewest, daysAgoOldest, label, now) {
+  return {
+    from: wallClock(dayStart(now, daysAgoOldest)),
+    to: wallClock(dayStart(now, daysAgoNewest - 1)),
+    label,
+  };
+}
+
 /**
  * 从查询里解析时间窗。识别不出就返回 null（**不猜**）。
+ *
+ * ⚠️ 边界用**本地墙钟**（不带 Z、不带 +08:00），并且在 SQL 里用 `substr(o.ts,1,19)` 比较。
+ * 原因（2026-10-29 实测）：库里的 ts 混了三种格式 —— `+08:00` 本地、只有日期、
+ * 无时区的本地墙钟。拿 UTC 的 Z 边界去字符串比，跨格式会错位 8 小时。
  * @returns {{from:string, to:string, label:string}|null}
  */
 function parseTimeWindow(query, { now = Date.now() } = {}) {
@@ -38,16 +70,10 @@ function parseTimeWindow(query, { now = Date.now() } = {}) {
   const m = /(\d{1,3})\s*天前/.exec(q);
   if (m) {
     const d = Number(m[1]);
-    const from = new Date(now - (d + 1) * DAY);
-    const to = new Date(now - d * DAY);
-    return { from: from.toISOString(), to: to.toISOString(), label: `${d} 天前` };
+    return windowFor(d, d, `${d} 天前`, now);
   }
   for (const h of HINTS) {
-    if (h.re.test(q)) {
-      const from = new Date(now - (h.to + 1) * DAY);
-      const to = new Date(now - h.from * DAY);
-      return { from: from.toISOString(), to: to.toISOString(), label: h.label };
-    }
+    if (h.re.test(q)) return windowFor(h.from, h.to, h.label, now);
   }
   return null;
 }
@@ -63,8 +89,9 @@ function timeSearch(db, win, limit, f = { sql: '', params: [] }) {
     .prepare(
       `SELECT ${COLS}, NULL AS _big, NULL AS bm25_score
          FROM observations o JOIN entities e ON e.id = o.entity_id
-        WHERE o.superseded_by IS NULL AND o.ts >= ? AND o.ts < ?${f.sql}
-        ORDER BY o.ts DESC
+        WHERE o.superseded_by IS NULL
+          AND substr(o.ts, 1, 19) >= ? AND substr(o.ts, 1, 19) < ?${f.sql}
+        ORDER BY substr(o.ts, 1, 19) DESC
         LIMIT ?`
     )
     .all(win.from, win.to, ...f.params, limit);
