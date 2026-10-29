@@ -57,7 +57,10 @@ async function build(n) {
      VALUES (?,?,?,?,?,?,1,1,?,NULL,?,?,?,0,?)`
   );
   const insFts = db.prepare('INSERT INTO obs_fts(rowid, content, entity_name, big) VALUES (?,?,?,?)');
-  const insVec = db.prepare('INSERT INTO obs_vec(obs_id, embedding) VALUES (?, ?)');
+  // 没有向量扩展（非 Windows 常见）就没有 obs_vec 表：跳过写向量，
+  // 只基准关键词/时间/实体三路 + 体积。CI 的 ubuntu job 就靠这条不红。
+  const hasVec = !!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'obs_vec'").get();
+  const insVec = hasVec ? db.prepare('INSERT INTO obs_vec(obs_id, embedding) VALUES (?, ?)') : null;
   const bigram = require(path.join(ROOT, 'src', 'bigram.cjs'));
   const words = ['记忆', '衰减', '检索', '备份', '恢复', '向量', '中文', '排序', '出处', '更正', '昨天', '实体'];
 
@@ -70,7 +73,7 @@ async function build(n) {
       i % 11 === 0 ? 'process' : 'memory', i % 3 === 0 ? 'tech' : 'person', 5, '基准数据 · 中性');
     const id = Number(r.lastInsertRowid);
     insFts.run(id, content, `实体${i % 50}`, bigram.indexText(content));
-    insVec.run(BigInt(id), JSON.stringify(fakeVec()));
+    if (insVec) insVec.run(BigInt(id), JSON.stringify(fakeVec()));
   }
   db.exec('COMMIT');
   const tInsert = Date.now() - t0 - tMigrate;
@@ -88,14 +91,16 @@ async function build(n) {
   const pct = (p) => lat[Math.min(lat.length - 1, Math.floor(lat.length * p))];
 
   // KNN 索引本身的耗时（假向量，只测索引规模）
-  const qv = JSON.stringify(fakeVec());
-  const knn = [];
-  for (let i = 0; i < 20; i++) {
-    const s = Date.now();
-    db.prepare('SELECT obs_id, distance FROM obs_vec WHERE embedding MATCH ? AND k = 5 ORDER BY distance').all(qv);
-    knn.push(Date.now() - s);
+  let knn = [];
+  if (hasVec) {
+    const qv = JSON.stringify(fakeVec());
+    for (let i = 0; i < 20; i++) {
+      const s = Date.now();
+      db.prepare('SELECT obs_id, distance FROM obs_vec WHERE embedding MATCH ? AND k = 5 ORDER BY distance').all(qv);
+      knn.push(Date.now() - s);
+    }
+    knn.sort((a, b) => a - b);
   }
-  knn.sort((a, b) => a - b);
 
   // 备份耗时（VACUUM INTO）
   const t1 = Date.now();
@@ -111,7 +116,9 @@ async function build(n) {
   return {
     n, tMigrate, tInsert, bytes, snapBytes, tBackup,
     searchP50: pct(0.5), searchP95: pct(0.95), searchMax: lat[lat.length - 1],
-    knnP50: knn[10], knnP95: knn[Math.floor(knn.length * 0.95)],
+    hasVec,
+    knnP50: hasVec ? knn[10] : null,
+    knnP95: hasVec ? knn[Math.floor(knn.length * 0.95)] : null,
   };
 }
 
@@ -126,7 +133,7 @@ async function build(n) {
       [pad(r.n), pad(r.tMigrate), pad(r.tInsert),
        pad((r.bytes / 1048576).toFixed(1) + 'MB'), pad((r.snapBytes / 1048576).toFixed(1) + 'MB'),
        pad(r.tBackup), pad(r.searchP50), pad(r.searchP95), pad(r.searchMax),
-       pad(r.knnP50 + 'ms'), pad(r.knnP95 + 'ms')].join(' | ')
+       pad(r.hasVec ? r.knnP50 + 'ms' : 'n/a'), pad(r.hasVec ? r.knnP95 + 'ms' : 'n/a')].join(' | ')
     );
   }
 })().catch((e) => { console.error('bench failed:', e.message); process.exit(1); });
