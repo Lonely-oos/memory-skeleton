@@ -114,7 +114,11 @@ function touch(db, obsId, { now = new Date() } = {}) {
   const row = db.prepare('SELECT id, last_touch, hit_count FROM observations WHERE id = ?').get(obsId);
   if (!row) return false;
   const last = row.last_touch ? new Date(row.last_touch).getTime() : 0;
-  if (last && now.getTime() - last < DAY_MS) return false;
+  const hit = Number(row.hit_count) || 0;
+  // 冷却只拦「重复回升」：**首次必须放行**。
+  // 曾经写成 `if (last && ...) return false`，结果刚写入的条目（last_touch = 写入时间）
+  // 永远拿不到第一次 hit，hit 权重等于死的（2026-10-29 测试抓到的）。
+  if (hit > 0 && last && now.getTime() - last < DAY_MS) return false;
   db.prepare('UPDATE observations SET hit_count = COALESCE(hit_count,0) + 1, last_touch = ? WHERE id = ?')
     .run(now.toISOString(), obsId);
   return true;

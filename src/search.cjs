@@ -264,6 +264,16 @@ async function search(db, query, opts = {}) {
   );
   const results = ranked.kept;
 
+  // ── 提及回升：检索命中即算一次"复习" ──
+  // 不接这一步，打分公式里 hit 那一项永远是 0（等于 0.10 权重是假的）。
+  // 冷却由 rank.touch() 负责：同一条 24 小时内最多回升一次。
+  let touched = 0;
+  if (opts.touch !== false) {
+    for (const r of results) {
+      try { if (rank.touch(db, Number(r.id))) touched++; } catch { /* 回升失败不影响检索 */ }
+    }
+  }
+
   // ── 审计：这次检索发生了什么（失败不影响返回）──
   audit.log(db, 'retrieve', {
     session: opts.session || null,
@@ -273,7 +283,7 @@ async function search(db, query, opts = {}) {
     scores: results.map((r) => ({ id: Number(r.id), score: r.score, parts: r.parts, stability: r.stability })),
     reason: 'ungrounded=' + ungrounded + ' grounding=' + grounding +
             ' kwMode=' + kw.mode + ' threshold=' + ranked.threshold +
-            ' dropped=' + ranked.droppedByThreshold.length +
+            ' dropped=' + ranked.droppedByThreshold.length + ' touched=' + touched +
             (vectorError ? ' vectorError=' + vectorError : ''),
   });
   // 被阈值挡掉的单独记一笔 —— 这条能回答「这条为什么被淘汰」
@@ -303,7 +313,7 @@ async function search(db, query, opts = {}) {
     vectorError,
     grounding,
     ungrounded,
-    ranked: { threshold: ranked.threshold, dropped: ranked.droppedByThreshold.length },
+    ranked: { threshold: ranked.threshold, dropped: ranked.droppedByThreshold.length, touched },
   };
 }
 
