@@ -1,0 +1,14 @@
+{
+  "name": "memory-skeleton",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Long-term memory store skeleton: SQLite + FTS5 + vector, with provenance, non-destructive correction and verifiable backups",
+  "main": "src/db.cjs",
+  "scripts": {
+    "smoke": "node examples/smoke-test.cjs",
+    "backup": "node scripts/backup.cjs",
+    "reindex": "node scripts/reindex.cjs"
+  },
+  "engines": { "node": ">=22.13" },
+  "license": "MIT"
+}
