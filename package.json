@@ -8,7 +8,8 @@
                     "smoke":  "node examples/smoke-test.cjs",
                     "backup":  "node scripts/backup.cjs",
                     "reindex":  "node scripts/reindex.cjs",
-                    "test":  "node examples/smoke-test.cjs"
+                    "test":  "node examples/smoke-test.cjs",
+                    "bench":  "node examples/bench-scale.cjs 10000 50000 100000"
                 },
     "engines":  {
                     "node":  "\u003e=22.13"
