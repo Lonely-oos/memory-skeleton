@@ -74,8 +74,15 @@ function timeSearch(db, win, limit, f = { sql: '', params: [] }) {
 function entitySearch(db, query, limit, f = { sql: '', params: [] }) {
   const q = String(query || '');
   const ents = db.prepare('SELECT id, name FROM entities').all();
-  // 实体名至少 2 个字符，避免「他」「我」这类单字实体把什么都圈进来
-  const matched = ents.filter((e) => e.name && e.name.length >= 2 && q.includes(e.name));
+  // 单字实体在中文里很常见（人名「汐」「暮」），不能一律挡掉；
+  // 但代词必须挡：否则「我」会把半个库圈进来。（2026-10-29 实测：去掉长度守卫后
+  // 「关于汐的记录」实体路从 0 变成有命中。）
+  const PRONOUNS = new Set(['他', '她', '我', '你', '它', '您', '谁', '的', '人']);
+  const matched = ents.filter((e) => {
+    if (!e.name) return false;
+    if (e.name.length >= 2) return q.includes(e.name);
+    return !PRONOUNS.has(e.name) && q.includes(e.name);
+  });
   if (!matched.length) return { rows: [], matched: [] };
   const ph = matched.map(() => '?').join(',');
   const rows = db
