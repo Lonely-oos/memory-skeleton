@@ -143,6 +143,13 @@ function lexicalGrounding(db, query, f) {
 
 /** 语义路：vec0 KNN。超取 4 倍再在 JS 里滤掉被更正的（k 用在过滤之前）。 */
 async function vectorSearch(db, query, limit, f, { maxDistance = D_MAX } = {}) {
+  // 扩展/表不在就明确跳过，报清楚原因（不要让它伪装成"没搜到"）
+  if (db.vectorAvailable === false) {
+    throw new Error('向量扩展未加载（本平台没有对应的 vec0 动态库）：本次只用关键词检索');
+  }
+  let hasVec = true;
+  try { db.prepare('SELECT 1 FROM obs_vec LIMIT 1').get(); } catch { hasVec = false; }
+  if (!hasVec) throw new Error('obs_vec 表不存在：本次只用关键词检索');
   const [vec] = await embed.embedBatch(query);
   const knn = db
     .prepare(

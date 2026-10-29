@@ -110,8 +110,17 @@ function putVector(db, obsId, vec) {
   db.prepare('UPDATE observations SET embedded = 1 WHERE id = ?').run(id);
 }
 
-/** 补算所有 embedded = 0 的条目。返回 {total, ok, failed} —— 绝不抛。 */
+/** 补算所有 embedded = 0 的条目。返回 {total, ok, failed, skipped} —— 绝不抛。 */
 async function fillPending(db, { batchSize = 32, limit = 100000 } = {}) {
+  // 向量扩展不可用（非 Windows 平台常见）时直接跳过，不要跑一遍 Ollama 再失败。
+  if (db.vectorAvailable === false) {
+    return { total: 0, ok: 0, failed: 0, skipped: 'vector extension not available on this platform' };
+  }
+  let vecTable = true;
+  try { db.prepare('SELECT 1 FROM obs_vec LIMIT 1').get(); } catch { vecTable = false; }
+  if (!vecTable) {
+    return { total: 0, ok: 0, failed: 0, skipped: 'obs_vec table missing' };
+  }
   const rows = db
     .prepare(
       'SELECT id, content FROM observations WHERE embedded = 0 ORDER BY id LIMIT ?'

@@ -100,13 +100,42 @@ CREATE VIEW IF NOT EXISTS live_observations AS
  * 写成 enableLoadExtension 会静默无效，事后调用 loadExtension 报
  * "extension loading is not allowed"）。
  */
+/**
+ * 打开库。
+ *
+ * ⚠️ **向量扩展加载失败不抛错、只降级**（2026-10-29 补）：
+ *   随仓库附带的是 Windows 的 `vec0.dll`；在 Linux/macOS 上它加载不了。
+ *   如果这里直接抛，用户连**纯关键词检索**都用不了 —— 而那本来不需要向量。
+ *   所以：能加载就用四路/两路语义；不能加载就标记 `vectorAvailable = false`，
+ *   由 search 自动退化为关键词路。
+ */
 function open(dbPath = DB_PATH) {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath, { allowExtension: true });
-  db.loadExtension(VEC_DLL);
+  let vectorAvailable = false;
+  let vectorError = null;
+  try {
+    db.loadExtension(VEC_DLL);
+    vectorAvailable = true;
+  } catch (e) {
+    vectorError = String((e && e.message) || e).slice(0, 200);
+  }
+  Object.defineProperty(db, 'vectorAvailable', { value: vectorAvailable, enumerable: false });
+  Object.defineProperty(db, 'vectorError', { value: vectorError, enumerable: false });
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
   return db;
+}
+
+/** 这个库能不能做向量检索（扩展已加载 **且** 已有 obs_vec 表） */
+function vectorReady(db) {
+  if (!db || db.vectorAvailable !== true) return false;
+  try {
+    db.prepare('SELECT 1 FROM obs_vec LIMIT 1').get();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -201,7 +230,8 @@ function migrate(db) {
       "CREATE VIRTUAL TABLE obs_fts USING fts5(content, entity_name, big, tokenize='unicode61')"
     );
   }
-  if (!has('obs_vec')) {
+  // 扩展不可用（比如非 Windows）时**不建** obs_vec —— 建了也用不了，还会让后续查询抛错
+  if (!has('obs_vec') && db.vectorAvailable !== false) {
     db.exec(
       'CREATE VIRTUAL TABLE obs_vec USING vec0(' +
         'obs_id INTEGER PRIMARY KEY, embedding FLOAT[1024] distance_metric=cosine)'
@@ -333,7 +363,7 @@ function indexObservation(db, bigram, id, content, entityName) {
 }
 
 module.exports = {
-  ROOT, VEC_DLL, DB_PATH, SCHEMA_VERSION, TABLES,
+  ROOT, VEC_DLL, DB_PATH, SCHEMA_VERSION, TABLES, vectorReady,
   open, migrate, nowISO, upsertEntity, insertObservation, indexObservation,
   upsertRelation, relationsOf,
 };
