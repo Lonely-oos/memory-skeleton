@@ -57,10 +57,18 @@ if (!fs.existsSync(snap)) {
 } else {
   try {
     db = new DatabaseSync(snap, { allowExtension: true });
-    db.loadExtension(path.join(path.resolve(__dirname, '..'), 'vec0.dll'));
-    ok('opens, vec0 extension loads');
+    ok('snapshot opens');
   } catch (e) {
     bad(`cannot open: ${e.message}`);
+  }
+  if (db) {
+    // 扩展按平台可选：没有 vec0 动态库时只做关键词库，这不算备份失败
+    try {
+      db.loadExtension(path.join(path.resolve(__dirname, '..'), 'vec0.dll'));
+      ok('vec0 extension loads');
+    } catch (e) {
+      ok(`vec0 extension not available here (${String(e.message).slice(0, 40)}) - keyword-only mode`);
+    }
   }
 }
 if (db) {
@@ -82,6 +90,10 @@ if (db) {
 
   // ── 3. 真做一次向量检索 ──────────────────────────────────────
   console.log('\n[3] vector search round-trip');
+  const hasVec = !!db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'obs_vec'").get();
+  if (!hasVec) {
+    ok('no obs_vec table in this snapshot (keyword-only database) - skipped');
+  } else {
   const row = db.prepare('SELECT obs_id, embedding FROM obs_vec LIMIT 1').get();
   if (!row) {
     // 空向量表是合法状态：没开 Ollama 时就是只做关键词检索
@@ -97,6 +109,7 @@ if (db) {
     } else {
       ok(`vector search ok: #${row.obs_id} finds itself, distance ${hits[0].distance.toFixed(6)}`);
     }
+  }
   }
   db.close();
 }

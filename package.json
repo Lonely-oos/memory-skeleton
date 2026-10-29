@@ -14,5 +14,32 @@
     "engines":  {
                     "node":  "\u003e=22.13"
                 },
-    "license":  "MIT"
+    "license":  "MIT",
+    "repository":  {
+                       "type":  "git",
+                       "url":  "https://github.com/Lonely-oos/memory-skeleton.git"
+                   },
+    "homepage":  "https://github.com/Lonely-oos/memory-skeleton#readme",
+    "bugs":  {
+                 "url":  "https://github.com/Lonely-oos/memory-skeleton/issues"
+             },
+    "keywords":  [
+                     "memory",
+                     "sqlite",
+                     "fts5",
+                     "vector-search",
+                     "long-term-memory",
+                     "bge-m3",
+                     "sqlite-vec",
+                     "chinese"
+                 ],
+    "files":  [
+                  "src/",
+                  "scripts/",
+                  "examples/",
+                  "vec0.dll",
+                  "README.md",
+                  "LICENSE",
+                  "CHANGELOG.md"
+              ]
 }

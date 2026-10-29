@@ -282,7 +282,11 @@ node scripts/verify-backup.cjs backups/2026-01-01_120000
 
 ```bash
 npm test        # = node examples/smoke-test.cjs：建库→写入→检索→更正→备份→校验
+npm run bench   # 规模基准（1 万 / 5 万 / 10 万条，建临时库，跑完自删）
 ```
+
+CI 在 ubuntu 与 windows 上跑 `npm test`（node 22 与 24）。
+**ubuntu 那一份是刻意保留的**：那里没有 Windows 版 `vec0.dll`，正好用来证明"仅关键词降级路径"也是绿的。
 ## 测试环境与数据量
 
 **环境**：Windows 11 (x64) · Node.js 24.21.0（`node:sqlite`）· sqlite-vec `vec0.dll`（Windows x64）
@@ -363,6 +367,9 @@ KNN 约 60 ms，**可以长期维持而不变慢**。代价是"很久没用过�
 
 > 结论：**不计归档，约 1～1.5 年进入"明显变慢"区；开了归档，规模可以无限期维持。**
 > 这两条都是按上面实测的 4.5 KB/条 与 4.2 ms/千条 外推的，换机器要重算。
+>
+> ⚠️ 这些是 **2026-10-29 的快照**。库会继续长、代码也还在改；
+> 想知道当前真实数字，请**自己跑** `npm run bench`，不要信 README 里的旧值。
 ## 已知问题清单（按严重度）
 
 1. **向量扩展只有 Windows 版**（`vec0.dll`）。其他平台会**自动降级**为纯关键词检索（不崩），
