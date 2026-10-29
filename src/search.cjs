@@ -16,6 +16,7 @@ const bigram = require('./bigram.cjs');
 const embed = require('./embed.cjs');
 const audit = require('./audit.cjs');
 const rank = require('./rank.cjs');
+const routes = require('./routes.cjs');
 
 const RRF_K = 60;
 const LOOSE_MIN_COVERAGE = 0.5;
@@ -248,7 +249,15 @@ async function search(db, query, opts = {}) {
   // ── 融合 → 加权重排（评审报告 4.2/4.3）──
   // 加权和，**绝不相乘**：相乘会让中性记忆永远进不了前 5。
   // 低于阈值不返回 —— 宁可少给，不要给错的。
-  const fused = ungrounded && opts.ungrounded !== 'show' ? [] : fuse([kw.rows, vs.rows], over);
+  // ── 时间路 / 实体路：四路召回的另外两路 ──
+  // 这两路不做相似度排序，只圈定候选： 「上周」没有内容词，「关于他的」不是相似度问题。
+  const timeWindow = routes.parseTimeWindow(query, { now: opts.now != null ? opts.now : Date.now() });
+  const timeRows = timeWindow ? routes.timeSearch(db, timeWindow, over, f) : [];
+  const ent = routes.entitySearch(db, query, over, f);
+
+  const fused = ungrounded && opts.ungrounded !== 'show'
+    ? []
+    : fuse([kw.rows, vs.rows, timeRows, ent.rows], over);
   const ids = fused.map((r) => Number(r.id));
   const metaRows = ids.length
     ? db.prepare(
@@ -278,7 +287,7 @@ async function search(db, query, opts = {}) {
   audit.log(db, 'retrieve', {
     session: opts.session || null,
     query,
-    candidates: { keyword: kw.rows.length, vector: vs.rows.length, limit, over, fused: fused.length },
+    candidates: { keyword: kw.rows.length, vector: vs.rows.length, time: timeRows.length, entity: ent.rows.length, limit, over, fused: fused.length },
     chosen: results.map((r) => Number(r.id)),
     scores: results.map((r) => ({ id: Number(r.id), score: r.score, parts: r.parts, stability: r.stability })),
     reason: 'ungrounded=' + ungrounded + ' grounding=' + grounding +
@@ -314,6 +323,9 @@ async function search(db, query, opts = {}) {
     grounding,
     ungrounded,
     ranked: { threshold: ranked.threshold, dropped: ranked.droppedByThreshold.length, touched },
+    routes: { time: timeRows.length, entity: ent.rows.length },
+    timeWindow,
+    entityMatched: ent.matched,
   };
 }
 

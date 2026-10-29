@@ -105,7 +105,40 @@ score = 0.55 * relevance
 提及加分**必须封顶**（+0.5），否则一条被反复提到的旧记忆会永久霸占检索位。
 `touch(db, id)` 负责回升，同一条 **24 小时内最多回升一次**（否则一次长对话能把它刷到最高分）。
 
-### 8. 硬归档兜底
+### 8. 四路召回：关键词 + 向量 + **时间** + **实体**
+
+前两路回答"像不像"，后两路回答"范围"：
+
+| 路 | 解决什么 | 实现 |
+|---|---|---|
+| 关键词 | 字面精确（人名、报错码、术语） | FTS5 + BM25（bigram 切中文） |
+| 向量 | 意思相近但用词不同 | bge-m3 + sqlite-vec |
+| **时间** | 「上周」「昨天」「3 天前」——字面没有内容词，相似度也抓不到 | `routes.cjs`：解析显式时间词 → 按 `ts` 圈候选 |
+| **实体** | 「关于他的事」——不是相似度问题，是归属问题 | `routes.cjs`：查询里出现已知实体名 → 取该实体的条目 |
+
+四路都用 RRF 融合（排名倒数相加），再按上面的加权公式重排。
+
+> **时间路只认显式时间词**：识别不出就返回 `null`，不猜范围。
+> 猜出来的窗口比不召回更糟——它会把无关的东西"证明"成相关。
+
+### 9. 三层巩固：日结 / 周结 / 月结，**必须带 source_ids**
+
+```js
+const summary = require('./src/summary.cjs');
+summary.buildDaily(db, { period: '2026-01-01' });        // 当天按 affect 取前 N 条原文
+summary.buildRollup(db, { level: 'week', period: summary.isoWeek('2026-01-01') });
+summary.buildRollup(db, { level: 'month', period: '2026-01' });
+summary.verify(db, { level: 'day', period: '2026-01-01' });  // 追溯链是否通
+```
+
+这一层**不调用模型**：摘要是"挑出最该记住的几条原文"，不是"让模型再写一遍"。
+每多一层改写就多一次漂移机会，而漂移在摘要上会被上一层放大。
+
+`verify()` 只保证**追溯链是通的**（source_ids 都能读回原文），
+**不能**自动判断"摘要有没有走样"——那个要人看。这是有意为之：
+自动判定"摘要忠实度"会用同一个模型去验自己的输出，等于没验。
+
+### 10. 硬归档兜底
 
 「容量自动收缩」在有持续新增时不成立：`archiveStale(db, {days: 180})` 把超过 180 天没被命中的条目
 移到 `archive_observations`（默认 `dryRun: true` 只报数不删）。
@@ -124,7 +157,7 @@ score = 0.55 * relevance
 | `obs_vec` | sqlite-vec 虚拟表，1024 维（bge-m3） |
 | `live_observations` | 视图：只含 `superseded_by IS NULL` 的条目 |`r`n| `summaries` | 三层巩固（day/week/month），**必须带 `source_ids`**，否则无法用原文校验 |`r`n| `memory_links` | 相关记忆只建索引、不合并原文（合并是不可逆的信息损失） |`r`n| `archive_observations` | 硬归档（180 天未命中），不参与检索但保留 |
 
-`src/bigram.cjs` 负责中文切分与 `MATCH` 表达式生成；`src/search.cjs` 做 RRF 融合
+`src/bigram.cjs` 负责中文切分与 `MATCH` 表达式生成；`src/search.cjs` 做四路 RRF 融合
 （关键词与向量的排名倒数相加），并对"关键词 0 命中、库里根本没有你问的词"的情况做**语义兜底拦截**。
 `src/audit.cjs` 只记"这次写了/搜了什么"，**不记正文**。
 

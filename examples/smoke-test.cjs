@@ -86,7 +86,15 @@ const { search } = require(path.join(ROOT, 'src', 'search.cjs'));
   });
   console.log('corrected -> new id', newId);
 
+  // 三层巩固：日结必须带 source_ids，且能追溯
+  const summary = require(path.join(ROOT, 'src', 'summary.cjs'));
+  const today = new Date().toISOString().slice(0, 10);
+  const s = summary.buildDaily(db, { period: today });
+  const v = summary.verify(db, { level: 'day', period: today });
+  console.log('daily summary ->', s.count, '条，source_ids', s.sourceIds.length, '| 可追溯:', v.traceable);
+
   db.close();
+
 
   // 备份 + 校验：真正证明"备份能用"
   const env = { ...process.env, MEMORY_DB: dbPath };
