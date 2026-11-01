@@ -1,6 +1,6 @@
 ﻿{
     "name":  "memory-skeleton",
-    "version":  "0.1.1",
+    "version":  "0.1.2",
     "private":  false,
     "description":  "Long-term memory store skeleton: SQLite + FTS5 + vector, with provenance, non-destructive correction and verifiable backups",
     "main":  "src/db.cjs",
@@ -9,7 +9,9 @@
                     "backup":  "node scripts/backup.cjs",
                     "reindex":  "node scripts/reindex.cjs",
                     "test":  "node examples/smoke-test.cjs \u0026\u0026 node tests/review-fixes.cjs",
-                    "bench":  "node examples/bench-scale.cjs 10000 50000 100000"
+                    "bench":  "node examples/bench-scale.cjs 10000 50000 100000",
+                    "bench:retrieval":  "node scripts/bench-retrieval.cjs examples/questions.example.json",
+                    "archive":  "node scripts/archive.cjs"
                 },
     "engines":  {
                     "node":  "\u003e=22.13"
