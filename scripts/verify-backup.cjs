@@ -41,10 +41,13 @@ if (!fs.existsSync(manPath)) {
 }
 const man = JSON.parse(fs.readFileSync(manPath, 'utf8'));
 for (const f of man.files) {
-  if (!fs.existsSync(f.to)) { bad(`${f.label} - missing`); continue; }
-  const sz = fs.statSync(f.to).size;
+  // MS-02：优先按相对备份根的路径解析（备份目录被搬走后仍然正确）；
+  // 旧清单没有 rel 时才回落到绝对路径。
+  const target = f.rel ? path.join(dir, f.rel) : f.to;
+  if (!fs.existsSync(target)) { bad(`${f.label} - missing (${f.rel || f.to})`); continue; }
+  const sz = fs.statSync(target).size;
   if (sz !== f.bytes) { bad(`${f.label} - size ${sz} != ${f.bytes}`); continue; }
-  if (sha(f.to) !== f.sha256) { bad(`${f.label} - sha256 mismatch`); continue; }
+  if (sha(target) !== f.sha256) { bad(`${f.label} - sha256 mismatch`); continue; }
   ok(`${f.label} (${sz} bytes)`);
 }
 

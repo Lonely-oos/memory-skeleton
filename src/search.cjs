@@ -283,15 +283,19 @@ async function search(db, query, opts = {}) {
   // ── 提及回升：检索命中即算一次"复习" ──
   // 不接这一步，打分公式里 hit 那一项永远是 0（等于 0.10 权重是假的）。
   // 冷却由 rank.touch() 负责：同一条 24 小时内最多回升一次。
+  // MS-06（外部审查 2026-11-01）：检索默认会写 hit_count/last_touch 与审计记录，
+  // 也就是说它不是纯读操作 —— 自动化巡检、预览、诊断时不该改变库状态。
+  // `{ readonly: true }` 同时关掉"提及回升"和审计写入。
+  const readonly = opts.readonly === true;
   let touched = 0;
-  if (opts.touch !== false) {
+  if (!readonly && opts.touch !== false) {
     for (const r of results) {
       try { if (rank.touch(db, Number(r.id))) touched++; } catch { /* 回升失败不影响检索 */ }
     }
   }
 
-  // ── 审计：这次检索发生了什么（失败不影响返回）──
-  audit.log(db, 'retrieve', {
+  // ── 审计：这次检索发生了什么（失败不影响返回；readonly 时不写）──
+  if (!readonly) audit.log(db, 'retrieve', {
     session: opts.session || null,
     query,
     candidates: { keyword: kw.rows.length, vector: vs.rows.length, time: timeRows.length, entity: ent.rows.length, limit, over, fused: fused.length },
@@ -303,7 +307,7 @@ async function search(db, query, opts = {}) {
             (vectorError ? ' vectorError=' + vectorError : ''),
   });
   // 被阈值挡掉的单独记一笔 —— 这条能回答「这条为什么被淘汰」
-  if (ranked.droppedByThreshold.length) {
+  if (!readonly && ranked.droppedByThreshold.length) {
     audit.log(db, 'decay', {
       session: opts.session || null,
       query,
@@ -329,7 +333,7 @@ async function search(db, query, opts = {}) {
     vectorError,
     grounding,
     ungrounded,
-    ranked: { threshold: ranked.threshold, dropped: ranked.droppedByThreshold.length, touched },
+    ranked: { threshold: ranked.threshold, dropped: ranked.droppedByThreshold.length, touched, readonly },
     routes: { time: timeRows.length, entity: ent.rows.length },
     timeWindow,
     entityMatched: ent.matched,

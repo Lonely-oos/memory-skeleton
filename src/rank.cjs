@@ -130,7 +130,12 @@ function touch(db, obsId, { now = new Date() } = {}) {
  * @returns {number} 归档条数
  */
 function archiveStale(db, { days = 180, now = Date.now(), dryRun = true } = {}) {
-  const cutoff = new Date(now - days * DAY_MS).toISOString();
+  // MS-04（外部审查 2026-11-01）：库里的 ts 混着「YYYY-MM-DD」「+08:00 本地」「无时区墙钟」三种格式，
+  // 用 UTC 的 ISO 串去比会错位（与时间路那次同因）。这里统一按本地墙钟前 19 位比较。
+  const p2 = (n) => String(n).padStart(2, '0');
+  const cut = new Date(now - days * DAY_MS);
+  const cutoff = `${cut.getFullYear()}-${p2(cut.getMonth() + 1)}-${p2(cut.getDate())}` +
+                 `T${p2(cut.getHours())}:${p2(cut.getMinutes())}:${p2(cut.getSeconds())}`;
   db.exec(`CREATE TABLE IF NOT EXISTS archive_observations (
     id INTEGER PRIMARY KEY, entity_id INTEGER, content TEXT, source TEXT,
     provenance TEXT, ts TEXT, recorded_at TEXT, supersedes INTEGER,
@@ -139,7 +144,7 @@ function archiveStale(db, { days = 180, now = Date.now(), dryRun = true } = {}) 
     hit_count INTEGER, last_touch TEXT, archived_at TEXT
   )`);
   const rows = db.prepare(
-    'SELECT id FROM observations WHERE COALESCE(last_touch, ts) < ? AND superseded_by IS NULL'
+    'SELECT id FROM observations WHERE substr(COALESCE(last_touch, ts), 1, 19) < ? AND superseded_by IS NULL'
   ).all(cutoff);
   if (dryRun) return rows.length;
   const ins = db.prepare(`INSERT INTO archive_observations
@@ -149,10 +154,24 @@ function archiveStale(db, { days = 180, now = Date.now(), dryRun = true } = {}) 
      version, embedded, kind, session_id, domain, affect, affect_why, hit_count, last_touch, ?
     FROM observations WHERE id = ?`);
   const del = db.prepare('DELETE FROM observations WHERE id = ?');
+  // MS-03（高）：归档只删主表会让 FTS 与向量索引里留下"指向不存在条目"的孤儿，
+  // 它们仍然占据候选名额，检索质量随归档量单调下降。
+  // 所以三件事必须在同一个事务里：写档案、删索引、删主表。
+  const delFts = db.prepare('DELETE FROM obs_fts WHERE rowid = ?');
+  let delVec = null;
+  try {
+    db.prepare('SELECT 1 FROM obs_vec LIMIT 1').get();
+    delVec = db.prepare('DELETE FROM obs_vec WHERE obs_id = ?');
+  } catch { /* 没有向量扩展/表就不是错误 */ }
   const at = new Date(now).toISOString();
   db.exec('BEGIN');
   try {
-    for (const r of rows) { ins.run(at, r.id); del.run(r.id); }
+    for (const r of rows) {
+      ins.run(at, r.id);
+      try { delFts.run(r.id); } catch { /* FTS 不存在时跳过 */ }
+      if (delVec) try { delVec.run(BigInt(r.id)); } catch { /* vec 删失败不阻断归档 */ }
+      del.run(r.id);
+    }
     db.exec('COMMIT');
   } catch (e) {
     try { db.exec('ROLLBACK'); } catch { /* ignore */ }

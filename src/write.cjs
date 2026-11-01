@@ -96,15 +96,24 @@ function correct(db, obsId, newContent, {
 
   db.exec('BEGIN');
   try {
+    // 更正必须继承原条目的记忆元数据（2026-11-01 外部审查 MS-01）。
+    // 原实现只继承了 kind，导致更正后 domain 回落 person、affect 回落 5.0、affect_why 变 NULL、
+    // hit_count 归零 —— 等于"改个错字，这条记忆的重要性被重置了"。
     const r = db
       .prepare(
-        'INSERT INTO observations(entity_id, content, source, provenance, kind, session_id, ts, recorded_at, supersedes) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO observations(entity_id, content, source, provenance, kind, session_id, ts, recorded_at, supersedes,' +
+        ' domain, affect, affect_why, hit_count, last_touch) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         old.entity_id, newContent, source,
         reason ? `更正 #${obsId}：${reason}` : `更正 #${obsId}`,
-        newKind, session_id, t, now, obsId
+        newKind, session_id, t, now, obsId,
+        old.domain ?? 'person',
+        old.affect ?? 5.0,
+        old.affect_why ?? null,
+        old.hit_count ?? 0,
+        old.last_touch ?? t
       );
     const newId = Number(r.lastInsertRowid);
     db.prepare('UPDATE observations SET superseded_by = ? WHERE id = ?').run(newId, obsId);

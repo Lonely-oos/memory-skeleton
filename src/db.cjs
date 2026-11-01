@@ -222,6 +222,19 @@ function migrate(db) {
     created_at TEXT NOT NULL,
     PRIMARY KEY (from_id, to_id, relation)
   )`);
+  // audit 表原先只在老库里手工建过，新库没有 → audit.log 的异常被吞掉，审计等于不生效。
+  // 审计是"这条为什么被注入/淘汰"的唯一证据来源，必须在建库时就存在。
+  db.exec(`CREATE TABLE IF NOT EXISTS audit (
+    id INTEGER PRIMARY KEY,
+    ts TEXT NOT NULL,
+    event TEXT NOT NULL,
+    query TEXT,
+    candidates TEXT,
+    chosen TEXT,
+    scores TEXT,
+    reason TEXT
+  )`);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audit_event ON audit(event)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_obs_domain ON observations(domain)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_obs_touch  ON observations(last_touch)');
 

@@ -25,7 +25,18 @@ const { DatabaseSync } = require('node:sqlite');
 const HERE = path.resolve(__dirname, '..');
 const DB = process.env.MEMORY_DB || path.join(HERE, 'memory.db');
 const ROOT = process.argv[2] || path.join(HERE, 'backups');
-const KEEP = Number(process.env.BACKUP_KEEP || 14);
+// MS-05（外部审查 2026-11-01，高·条件性）：KEEP 未校验时，0 或负数会让
+// `dirs.length - KEEP` 等于目录总数，于是**连刚做的这份一起**被删 —— 一次配置失误丢光备份。
+// 规则：必须是 ≥1 的整数，否则回落默认值并明确告警；上限 365。
+const KEEP_RAW = process.env.BACKUP_KEEP;
+const KEEP_DEFAULT = 14;
+const KEEP_PARSED = Number(KEEP_RAW);
+const KEEP = (Number.isInteger(KEEP_PARSED) && KEEP_PARSED >= 1)
+  ? Math.min(KEEP_PARSED, 365)
+  : KEEP_DEFAULT;
+if (KEEP_RAW != null && Number.isInteger(KEEP_PARSED) && KEEP_PARSED < 1) {
+  console.warn(`[backup] ⚠ BACKUP_KEEP=${KEEP_RAW} 不合法（要求 ≥1 的整数），已回落到 ${KEEP_DEFAULT}`);
+}
 
 const pad = (n, w = 2) => String(n).padStart(w, '0');
 const stamp = (d = new Date()) =>
@@ -65,8 +76,12 @@ const counts = {
 db.close();
 
 // ── 3. 清单 + 恢复说明 ──────────────────────────────────────────
+// MS-02（外部审查 2026-11-01）：清单原来只存绝对路径，备份目录一搬走，
+// 校验器就会去读旧位置 —— 要么假通过（旧文件还在），要么假失败。
+// 这里同时存一份相对备份根的路径，校验器优先用它。
 const files = [{
   label: 'snapshot/memory.db',
+  rel: path.relative(dest, snap),
   to: snap,
   bytes: fs.statSync(snap).size,
   sha256: sha(snap),
@@ -112,9 +127,12 @@ if (fs.existsSync(ROOT)) {
     .filter((d) => d.isDirectory() && /^\d{4}-\d{2}-\d{2}_\d{6}$/.test(d.name))
     .map((d) => d.name)
     .sort();
-  const extra = dirs.length - KEEP;
+  // 永远先排除「本次刚创建的目录」，任何计数失误都不能删到正在写的备份
+  const currentName = path.basename(dest);
+  const candidates = dirs.filter((d) => d !== currentName);
+  const extra = candidates.length - (KEEP - 1);
   if (extra > 0) {
-    const drop = dirs.slice(0, extra);
+    const drop = candidates.slice(0, extra);
     for (const name of drop) {
       fs.rmSync(path.join(ROOT, name), { recursive: true, force: true });
     }
