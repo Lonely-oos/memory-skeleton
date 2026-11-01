@@ -1,6 +1,6 @@
 ﻿{
     "name":  "memory-skeleton",
-    "version":  "0.1.0",
+    "version":  "0.1.1",
     "private":  false,
     "description":  "Long-term memory store skeleton: SQLite + FTS5 + vector, with provenance, non-destructive correction and verifiable backups",
     "main":  "src/db.cjs",
